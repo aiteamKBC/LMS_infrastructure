@@ -1,0 +1,14 @@
+# Provider downloads
+.terraform/
+
+# State and plans contain secrets and real resource IDs
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Real variable values (secrets)
+*.tfvars
+.tfvars
+
+# Load test account (LOADTEST_EMAIL / LOADTEST_PASSWORD)
+*.env
