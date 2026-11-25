@@ -3,7 +3,10 @@
 Parses .env exactly like config/settings.py:load_env_file, so the services get
 the same values Django sees on the VPS. Prints only counts, never values.
 Usage: python3 -I env_to_tfvars.py <path/to/.env> <path/to/output.tfvars>
+For production, add --production-env <private-production.env>. Existing production
+values then take precedence over local values; new local keys remain available.
 """
+import argparse
 import hashlib
 import json
 import os
@@ -46,15 +49,31 @@ def hcl_string(value):
     return '"' + value.replace('${', '$${').replace('%{', '%%{') + '"'
 
 
-def main(env_path, out_path):
+def export_values(env_path, production_env_path=None):
     values, skipped = parse(env_path)
+    if production_env_path:
+        production, production_skipped = parse(production_env_path)
+        if not production:
+            raise ValueError('Production reference is empty; no export was written')
+        # Preserve every production setting, including entries absent locally.
+        # The ECS app_environment map still owns runtime URLs, hosts and cache.
+        values.update(production)
+        skipped += production_skipped
+    return values, skipped
+
+
+def main(env_path, out_path, production_env_path=None):
+    inputs = [env_path] + ([production_env_path] if production_env_path else [])
+    if any(os.path.realpath(path) == os.path.realpath(out_path) for path in inputs):
+        raise ValueError('Output must not overwrite an environment input')
+    values, skipped = export_values(env_path, production_env_path)
     # Changes whenever any value changes, so terraform apply re-sends the
     # secret and restarts the services without a manual version bump
     digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
     version = int(digest[:8], 16)
     lines = [
         '# GENERATED from backend/.env - contains secrets, never commit or share.',
-        '# Regenerate after changing .env: python3 -I scripts/env_to_tfvars.py ../backend/.env secrets.auto.tfvars',
+        '# Preserve production values with --production-env <private-production.env>.',
         f'app_secrets_version = {version}',
         'app_secrets = {',
     ]
@@ -70,4 +89,9 @@ def main(env_path, out_path):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('env_path')
+    parser.add_argument('out_path')
+    parser.add_argument('--production-env', dest='production_env_path')
+    arguments = parser.parse_args()
+    main(arguments.env_path, arguments.out_path, arguments.production_env_path)

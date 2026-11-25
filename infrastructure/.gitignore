@@ -1,6 +1,10 @@
 # Provider downloads
 .terraform/
 
+# Python helper bytecode
+__pycache__/
+*.pyc
+
 # State and plans contain secrets and real resource IDs
 *.tfstate
 *.tfstate.*
