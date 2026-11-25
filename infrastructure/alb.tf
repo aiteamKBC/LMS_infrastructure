@@ -29,7 +29,8 @@ resource "aws_lb_target_group" "api" {
   vpc_id      = aws_vpc.main.id
 
   # Let in-flight requests finish when a task is replaced or scaled in
-  deregistration_delay = 120
+  # (CloudFront gives up on a request after 60 s anyway)
+  deregistration_delay = 60
 
   # least_outstanding_requests sends each request to the task with the fewest
   # in progress, so one slow task doesn't keep receiving an equal share and
@@ -37,11 +38,15 @@ resource "aws_lb_target_group" "api" {
   load_balancing_algorithm_type = var.lb_algorithm
 
   health_check {
-    path                = var.health_check_path # answered by config/health.py
-    matcher             = "200"
+    path    = var.health_check_path # answered by config/health.py
+    matcher = "200"
+    # New tasks count as healthy after 2 checks 10 s apart (20 s instead of
+    # 60 s), which shortens every deploy. Removing a task still takes 6
+    # failed checks (60 s), so a task that is only busy under load isn't
+    # pulled out of service.
     healthy_threshold   = 2
-    unhealthy_threshold = 3
-    interval            = 30
+    unhealthy_threshold = 6
+    interval            = 10
     timeout             = 5
   }
 

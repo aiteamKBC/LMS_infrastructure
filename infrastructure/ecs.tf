@@ -20,13 +20,26 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
   capacity_providers = ["FARGATE", "FARGATE_SPOT"]
 }
 
+# Asks AWS to raise the Fargate On-Demand vCPU limit (var.fargate_vcpu_quota;
+# 0 = leave it). Approval can take hours to days; a quota can't be lowered again.
+resource "aws_servicequotas_service_quota" "fargate_vcpu" {
+  count = var.fargate_vcpu_quota > 0 ? 1 : 0
+
+  service_code = "fargate"
+  quota_code   = "L-3032A538" # Fargate On-Demand vCPU resource count
+  value        = var.fargate_vcpu_quota
+}
+
 locals {
   # The APIs actually deployed: api_services minus disabled_services
   api_services = { for k, v in var.api_services : k => v if !contains(var.disabled_services, k) }
 
   # Domains users open the site on: the custom domain, CloudFront's own, and any extras
-  site_hosts = concat([var.domain_name, aws_cloudfront_distribution.main.domain_name], var.app_hosts)
-  site_url   = "https://${var.domain_name}"
+  # public_domain (the live lms. domain) is the address used in links and
+  # sign-in callbacks; domain_name stays accepted
+  site_domain = var.public_domain != "" ? var.public_domain : var.domain_name
+  site_hosts  = distinct(concat([local.site_domain, var.domain_name, aws_cloudfront_distribution.main.domain_name], var.app_hosts))
+  site_url    = "https://${local.site_domain}"
 
   app_image  = "${aws_ecr_repository.backend.repository_url}:${var.image_tag}"
   valkey_url = "rediss://${aws_elasticache_replication_group.valkey.primary_endpoint_address}:6379" # rediss = TLS
@@ -64,6 +77,19 @@ locals {
     AZURE_LOGIN_APP_REDIRECT_URI = "${local.site_url}/api/auth/azure/callback"
     MICROSOFT_CALLBACK_URI       = "${local.site_url}/api/calendar/microsoft/callback"
     GOOGLE_CALLBACK_URI          = "${local.site_url}/api/calendar/google/callback"
+
+    # File storage (storage.tf): azure until the files are copied, then s3.
+    # S3 access comes from the task role; no storage key is needed.
+    STORAGE_BACKEND       = var.storage_backend
+    AWS_S3_STORAGE_BUCKET = aws_s3_bucket.files.bucket
+    AWS_S3_STORAGE_REGION = var.aws_region
+
+    # Learner read pages: 30 s shared cache, one build per key at a time
+    # (backend learner_api/response_cache.py); 0 turns it off
+    LEARNER_RESPONSE_CACHE_SECONDS = "30"
+    # Logs every request over SLOW_REQUEST_THRESHOLD_MS (750 ms) with its
+    # database time and query count (backend config/performance.py)
+    PERFORMANCE_DIAGNOSTICS = "true"
 
     # Background schedulers off: the VPS already runs them against the same
     # databases, so running them here too would send duplicate emails and syncs
@@ -108,6 +134,8 @@ resource "aws_ecs_task_definition" "api" {
       for k, v in merge(local.app_environment, {
         PORT            = tostring(each.value.port)
         WEB_CONCURRENCY = tostring(try(var.service_sizes[each.key].workers, var.web_workers))
+        # Turns on the 10-second load metric (backend config/load_metric.py)
+        LOAD_METRIC_SERVICE = replace(each.key, "_", "-")
       }) :
       { name = k, value = v }
     ]
@@ -170,17 +198,18 @@ resource "aws_ecs_service" "api" {
   }
 
   # Django needs time to start before the first health check counts
-  health_check_grace_period_seconds = 120
+  health_check_grace_period_seconds = 60 # health check answers before Django finishes loading
 
   # Rolling update: start the new task before stopping the old one, and roll
   # back automatically if the new version never becomes healthy
-  # Services with 2+ tasks replace one task at a time (stop one, start one),
-  # so a rollout needs no spare vCPU under the account's 12 vCPU Fargate
-  # limit. Single-task services start the new task first (needs 1 spare task).
-  deployment_minimum_healthy_percent = local.min_tasks[each.key] >= 2 ? 50 : 100
-  deployment_maximum_percent         = local.min_tasks[each.key] >= 2 ? 100 : 200
-  # AZ rebalancing requires maximum_percent above 100
-  availability_zone_rebalancing = local.min_tasks[each.key] >= 2 ? "DISABLED" : "ENABLED"
+  # Start new tasks before stopping old ones: the service never drops below
+  # its running count during a deploy or settings change (the old 50%/100%
+  # halved capacity for ~15 minutes). Needs spare Fargate vCPU for the extra
+  # tasks while both versions run; if the account limit is reached, ECS
+  # replaces tasks more slowly but still never goes below 100%.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+  availability_zone_rebalancing      = "ENABLED"
   deployment_circuit_breaker {
     enable   = true
     rollback = true

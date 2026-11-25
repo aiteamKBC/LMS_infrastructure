@@ -1,7 +1,6 @@
 # ------------------------------------------------------------
 # LMS on AWS - Terraform and provider setup
-# Region: eu-north-1 (Stockholm). The architecture diagram shows London,
-# but the AWS account's Free plan only allows eu-north-1.
+# Region: eu-west-2 (London), next to the Neon databases.
 # ------------------------------------------------------------
 
 terraform {
@@ -14,8 +13,10 @@ terraform {
     }
   }
 
-  # State is local (infrastructure/terraform.tfstate, git-ignored).
-  # Move it to an S3 backend before more than one person runs Terraform.
+  # State is local and git-ignored: the London stack uses the "london"
+  # workspace (terraform.tfstate.d/london/); the default workspace holds the
+  # old Stockholm stack in the previous account. Move it to an S3 backend
+  # before more than one person runs Terraform.
 }
 
 provider "aws" {
@@ -30,8 +31,8 @@ provider "aws" {
   }
 }
 
-# CloudFront only accepts certificates from us-east-1, so certificate
-# lookups use this second provider. Nothing else is created there.
+# CloudFront only accepts certificates from us-east-1, so the certificate
+# is created with this second provider. Nothing else is created there.
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"

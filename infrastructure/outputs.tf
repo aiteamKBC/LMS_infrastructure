@@ -60,8 +60,8 @@ output "ecs_services" {
 }
 
 output "site_url" {
-  description = "Open the LMS here (after the Hostinger CNAME exists)"
-  value       = "https://${var.domain_name}"
+  description = "Open the LMS here"
+  value       = local.site_url
 }
 
 output "cloudfront_url" {
@@ -72,9 +72,18 @@ output "dns_record" {
   description = "Add this record in Hostinger DNS"
   value = {
     type   = "CNAME"
-    name   = trimsuffix(var.domain_name, ".kentbusinesscollege.net")
+    name   = split(".", var.domain_name)[0] # Hostinger adds the domain itself
     target = aws_cloudfront_distribution.main.domain_name
   }
+}
+
+output "certificate_validation_record" {
+  description = "Add this record in Hostinger DNS once, so AWS can issue the certificate"
+  value = [for o in aws_acm_certificate.site.domain_validation_options : {
+    type   = o.resource_record_type
+    name   = trimsuffix(trimsuffix(trimsuffix(o.resource_record_name, "."), ".kentbusinesscollege.org"), ".kentbusinesscollege.net")
+    target = o.resource_record_value
+  }]
 }
 
 output "cloudfront_distribution_id" {
@@ -85,4 +94,8 @@ output "cloudfront_distribution_id" {
 output "frontend_bucket" {
   description = "Upload frontend/out here"
   value       = aws_s3_bucket.frontend.bucket
+}
+
+output "aws_region" {
+  value = var.aws_region
 }

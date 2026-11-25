@@ -1,7 +1,7 @@
 variable "aws_region" {
-  description = "AWS region (the account's Free plan only allows eu-north-1)"
+  description = "AWS region; London, next to the Neon databases (eu-west-2)"
   type        = string
-  default     = "eu-north-1"
+  default     = "eu-west-2"
 }
 
 variable "project" {
@@ -31,9 +31,9 @@ variable "nat_per_az" {
 }
 
 variable "availability_zones" {
-  description = "Zones to spread subnets and tasks across (Stockholm has a, b and c)"
+  description = "Zones to spread subnets and tasks across (London has a, b, c and d)"
   type        = list(string)
-  default     = ["eu-north-1a", "eu-north-1b", "eu-north-1c"]
+  default     = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
 }
 
 # ---- App ----
@@ -81,6 +81,12 @@ variable "backend_paths" {
     "/login_api/*",
     "/progress_reviews_api/*",
     "/django_admin/*",
+    # MCP server for AI connectors (ChatGPT/Claude) and its OAuth sign-in
+    # (backend mcp_api; answers 404 unless MCP_ENABLED is on)
+    "/mcp",
+    "/mcp/*",
+    "/oauth/*",
+    "/.well-known/oauth-*",
   ]
 }
 
@@ -134,13 +140,27 @@ variable "web_workers" {
 variable "max_count" {
   description = "Most tasks auto scaling may run per API service (unless service_max_counts says otherwise)"
   type        = number
-  default     = 4
+  default     = 2
 }
 
 variable "service_max_counts" {
-  description = "Services that may scale beyond max_count (api name => most tasks). Tasks above the minimum run on Fargate Spot, so together they stay within the account's 12 On-Demand + 12 Spot vCPU"
+  description = "Services that may scale beyond max_count (api name => most tasks). At these limits the three 2 vCPU services alone could reach 540 vCPU, far above the account's 128 vCPU Fargate On-Demand quota: ECS can't start tasks past the quota until it is raised"
   type        = map(number)
-  default     = {}
+  default = {
+    learner_api    = 90
+    login_api      = 90
+    curriculum_api = 90 # default_service: also gets every unrouted path
+    engagement_api = 10
+    enrolment_api  = 10
+    quiz_api       = 10
+    coach_api      = 10
+  }
+}
+
+variable "fargate_vcpu_quota" {
+  description = "Fargate On-Demand vCPU limit to request from AWS (0 = don't request; new accounts start at 12)"
+  type        = number
+  default     = 0
 }
 
 variable "spot_scale_out" {
@@ -152,31 +172,100 @@ variable "spot_scale_out" {
 variable "burst_scale_out" {
   description = "Add the burst step-scaling rule (burst_step tasks at once above burst_cpu_threshold) on top of target tracking"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "burst_cpu_threshold" {
   description = "Average CPU % at which a service adds burst_step tasks at once (on top of target tracking), so a sudden surge doesn't wait ~3 minutes"
   type        = number
-  default     = 75
+  default     = 59
 }
 
 variable "burst_step" {
   description = "Tasks added at once when CPU passes burst_cpu_threshold"
   type        = number
-  default     = 3
+  default     = 6
+}
+
+variable "fast_scale_out" {
+  description = "Also trigger the burst rule from the app's 10-second load metric (LMS/App ConcurrentRequests), so a surge adds tasks within ~30 s instead of minutes; needs a backend image with config/load_metric.py"
+  type        = bool
+  default     = true
+}
+
+variable "fast_concurrency_threshold" {
+  description = "Average requests in progress per worker process that counts as overloaded (a worker serves Django views one at a time, so above ~1 they queue)"
+  type        = number
+  default     = 2
+}
+
+variable "headroom_tasks" {
+  description = "Spare tasks kept running ahead of the load: auto scaling aims for (busy tasks + headroom_tasks), e.g. 4 busy -> 6 running, 6 busy -> 8 (0 = off). Uses the app's load metric, like fast_scale_out"
+  type        = number
+  default     = 2
+}
+
+variable "busy_concurrency" {
+  description = "Average requests in progress per worker at which a task counts as busy for headroom_tasks (1 = every worker always handling a request)"
+  type        = number
+  default     = 0.7
+}
+
+variable "daytime_min_counts" {
+  description = "Higher minimum tasks during class hours (api name => tasks), so capacity is running before learners arrive; empty = no schedule"
+  type        = map(number)
+  default = {
+    # 3 since 10 Nov 2026: the busiest week so far (29 learners in 5 min)
+    # peaked at 12% CPU on ~4 tasks; headroom and burst scaling add more
+    learner_api    = 3
+    login_api      = 3
+    curriculum_api = 3
+    # Same as their night minimum: listing them gives them the morning/evening
+    # schedule, which is what sets min_capacity (Terraform leaves it alone)
+    engagement_api = 3
+    enrolment_api  = 3
+    quiz_api       = 3
+    coach_api      = 3
+  }
+}
+
+variable "daytime_start" {
+  description = "When daytime_min_counts starts (App Auto Scaling cron, in daytime_timezone); 15 minutes before the 09:00 start, so the tasks are running when learners arrive"
+  type        = string
+  default     = "cron(45 8 ? * MON-FRI *)"
+}
+
+variable "daytime_end" {
+  description = "When the minimum goes back to normal (App Auto Scaling cron, in daytime_timezone); working hours end at 18:00"
+  type        = string
+  default     = "cron(0 18 ? * MON-FRI *)"
+}
+
+variable "daytime_timezone" {
+  description = "Time zone of daytime_start/daytime_end"
+  type        = string
+  default     = "Europe/London"
 }
 
 variable "service_sizes" {
-  description = "Services that run smaller than task_cpu/task_memory/web_workers (api name => size); quiet services, to stay under the account's 12 vCPU Fargate limit"
+  description = "Services sized differently from task_cpu/task_memory/web_workers (api name => size). The two busy APIs get 2 vCPU / 4 GB (learner-api ran out of memory headroom at 2 GB); quiet ones shrink so normal running fits the 12 vCPU quota (11.5 vCPU)"
   type = map(object({
     cpu     = number
     memory  = number
     workers = number
   }))
   default = {
-    chat      = { cpu = 256, memory = 1024, workers = 1 }
-    audit_api = { cpu = 512, memory = 1024, workers = 2 }
+    # 8 workers x ~600 MB under load needs more than 4 GB (learner-api reached 98% of 4 GB at 5 workers)
+    learner_api    = { cpu = 2048, memory = 8192, workers = 8 }
+    login_api      = { cpu = 2048, memory = 8192, workers = 8 } # sign-in (password hashing) is CPU bound
+    curriculum_api = { cpu = 2048, memory = 8192, workers = 8 }
+    coach_api      = { cpu = 1024, memory = 3072, workers = 3 }
+    # 2 workers in 1 GB ran out of memory and workers died (502s) on 2026-11-05
+    engagement_api = { cpu = 1024, memory = 3072, workers = 3 }
+    enrolment_api  = { cpu = 1024, memory = 3072, workers = 3 }
+    quiz_api       = { cpu = 1024, memory = 3072, workers = 3 }
+    chat           = { cpu = 256, memory = 1024, workers = 1 }
+    audit_api      = { cpu = 512, memory = 1024, workers = 2 }
   }
 }
 
@@ -187,26 +276,41 @@ variable "service_min_counts" {
     login_api      = 2
     learner_api    = 2
     curriculum_api = 2
-    enrolment_api  = 2
+    enrolment_api  = 3
+    engagement_api = 3
+    quiz_api       = 3
+    coach_api      = 3
   }
 }
 
 variable "cpu_target" {
   description = "Average CPU % per service that auto scaling keeps tasks at"
   type        = number
-  default     = 60
+  default     = 60 # headroom: at 100% CPU requests queue and the Neon pool times out
 }
 
 variable "domain_name" {
-  description = "Custom domain of this environment (CNAME at Hostinger -> CloudFront); never the production lms. domain"
+  description = "The live domain (CNAME at Hostinger -> CloudFront); switched from lms-aws.kentbusinesscollege.net on 2026-11-04"
   type        = string
-  default     = "lms-aws.kentbusinesscollege.net"
+  default     = "lms.kentbusinesscollege.org"
 }
 
-variable "certificate_domain" {
-  description = "Existing ISSUED certificate in us-east-1 that covers domain_name"
+variable "certificate_extra_names" {
+  description = "Extra names on the CloudFront certificate (the issued certificate also covers the retired lms-aws name; changing this replaces the certificate)"
+  type        = list(string)
+  default     = ["lms-aws.kentbusinesscollege.net"]
+}
+
+variable "attach_domain" {
+  description = "Serve domain_name on CloudFront. Turn on only after its certificate is ISSUED (validation record added in Hostinger) and no other CloudFront distribution, e.g. the old Stockholm stack, still uses the name"
+  type        = bool
+  default     = true
+}
+
+variable "public_domain" {
+  description = "Override for the address used in links, emails and Microsoft/Google sign-in callbacks; empty = domain_name"
   type        = string
-  default     = "*.kentbusinesscollege.net"
+  default     = ""
 }
 
 variable "app_hosts" {
@@ -252,5 +356,5 @@ variable "valkey_engine_version" {
 variable "valkey_node_type" {
   description = "Size of each Valkey node"
   type        = string
-  default     = "cache.t4g.micro"
+  default     = "cache.t4g.medium"
 }

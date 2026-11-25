@@ -152,3 +152,15 @@ resource "aws_route_table_association" "data" {
   subnet_id      = aws_subnet.data[count.index].id
   route_table_id = aws_route_table.data.id
 }
+
+# S3 gateway endpoint (free): S3 traffic from the private subnets - the app's
+# file reads/writes and the ECR image layers every deploy pulls (~0.3 GB per
+# task) - goes straight to S3 instead of through the NAT gateway, which
+# charges per GB.
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = concat(aws_route_table.app[*].id, aws_route_table.data[*].id)
+  tags              = { Name = "${local.name}-s3" }
+}

@@ -21,12 +21,17 @@ data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
 }
 
-# The existing wildcard certificate (also used by the image uploader)
-data "aws_acm_certificate" "site" {
-  provider    = aws.us_east_1
-  domain      = var.certificate_domain
-  statuses    = ["ISSUED"]
-  most_recent = true
+# Certificate for domain_name, checked by DNS: add the record from the
+# certificate_validation_record output in Hostinger once
+resource "aws_acm_certificate" "site" {
+  provider                  = aws.us_east_1
+  domain_name               = var.domain_name
+  subject_alternative_names = var.certificate_extra_names
+  validation_method         = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_cloudfront_origin_access_control" "frontend" {
@@ -59,11 +64,15 @@ locals {
   alb_origin_id = "backend-alb"
 }
 
+locals {
+  certificate_issued = aws_acm_certificate.site.status == "ISSUED"
+}
+
 resource "aws_cloudfront_distribution" "main" {
   enabled             = true
   comment             = "${local.name} - LMS frontend + API"
   default_root_object = "index.html"
-  aliases             = [var.domain_name]
+  aliases             = var.attach_domain ? [var.domain_name] : []
   price_class         = "PriceClass_100" # edge locations in Europe and North America
   http_version        = "http2and3"
 
@@ -122,10 +131,13 @@ resource "aws_cloudfront_distribution" "main" {
     }
   }
 
-  # https://<domain_name>; the https://<id>.cloudfront.net address keeps working too
+  # The certificate goes on as soon as it is ISSUED (an alias can only be
+  # moved here from another distribution once it is), https://<domain_name>
+  # once attach_domain is on; https://<id>.cloudfront.net works either way
   viewer_certificate {
-    acm_certificate_arn      = data.aws_acm_certificate.site.arn
-    ssl_support_method       = "sni-only"
-    minimum_protocol_version = "TLSv1.2_2021"
+    acm_certificate_arn            = local.certificate_issued ? aws_acm_certificate.site.arn : null
+    ssl_support_method             = local.certificate_issued ? "sni-only" : null
+    minimum_protocol_version       = local.certificate_issued ? "TLSv1.2_2021" : null
+    cloudfront_default_certificate = !local.certificate_issued
   }
 }

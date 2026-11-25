@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 
 : "${BASE_URL:?set BASE_URL}"
 : "${PEAK_VUS:?set PEAK_VUS}"
-REGION=eu-north-1
+REGION=$(terraform -chdir=.. output -raw aws_region 2>/dev/null || echo eu-west-2)
 PARAM=/lms-staging/loadtest/env
 
 mapfile -t ids < <(terraform -chdir=.. output -json loadgen_instance_ids | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)))')

@@ -16,7 +16,7 @@ variable "loadgen_enabled" {
 }
 
 variable "loadgen_instance_type" {
-  description = "Load generator size; the Free plan only allows free-tier-eligible types (EC2 has its own vCPU limit, separate from Fargate)"
+  description = "Load generator size; EC2 has its own vCPU limit, separate from Fargate"
   type        = string
   default     = "m7i-flex.large"
 }
