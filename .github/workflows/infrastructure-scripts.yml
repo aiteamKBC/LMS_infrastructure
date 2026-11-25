@@ -1,0 +1,23 @@
+name: Infrastructure scripts
+
+on:
+  pull_request:
+    paths:
+      - infrastructure/scripts/**
+      - .github/workflows/infrastructure-scripts.yml
+  push:
+    branches: [main]
+    paths:
+      - infrastructure/scripts/**
+      - .github/workflows/infrastructure-scripts.yml
+
+permissions:
+  contents: read
+
+jobs:
+  settings-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify environment export and guarded service updates
+        run: python3 -B -m unittest discover -s infrastructure/scripts -p 'test_*.py' -v
