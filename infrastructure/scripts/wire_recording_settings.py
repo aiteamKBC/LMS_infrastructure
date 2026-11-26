@@ -27,7 +27,9 @@ TARGETS = {
 }
 
 
-def build_plan(client, cluster, expected_account):
+def build_plan(client, cluster, expected_account, worker_cpu=None, worker_memory=None):
+    if (worker_cpu, worker_memory) not in ((None, None), (512, 2048), (1024, 3072)):
+        raise ConfigurationError('Use the measured 512/2048 profile or the previous 1024/3072 profile')
     if client('sts', 'get-caller-identity', {})['Account'] != expected_account:
         raise ConfigurationError('Unexpected AWS account')
     _, source = service_definition(client, cluster, 'curriculum-api')
@@ -60,6 +62,8 @@ def build_plan(client, cluster, expected_account):
             if policy.get('minimumHealthyPercent') != 0 or policy.get('maximumPercent') != 100:
                 raise ConfigurationError('Worker must stop before its replacement starts')
         proposed = registration(current)
+        if name == 'session-worker' and worker_cpu is not None:
+            proposed.update(cpu=str(worker_cpu), memory=str(worker_memory))
         container = proposed['containerDefinitions'][0]
         existing = {row['name']: row['valueFrom'] for row in container.get('secrets', [])}
         if not any(ref.startswith(secret_id + ':') for ref in existing.values()):
@@ -88,12 +92,14 @@ def main():
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--expected-plan')
     parser.add_argument('--backup-dir')
+    parser.add_argument('--worker-cpu', type=int)
+    parser.add_argument('--worker-memory', type=int)
     args = parser.parse_args()
     if args.apply and not (args.expected_plan and args.backup_dir):
         parser.error('--apply requires --expected-plan and a private --backup-dir')
     try:
         client = AwsCli(args.region)
-        plan = build_plan(client, args.cluster, args.expected_account)
+        plan = build_plan(client, args.cluster, args.expected_account, args.worker_cpu, args.worker_memory)
         result = apply_plan(client, plan, args.expected_plan, args.backup_dir) if args.apply else public_plan(plan)
         print(json.dumps(result, indent=2))
     except (ConfigurationError, ValueError, KeyError) as error:

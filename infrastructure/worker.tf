@@ -33,6 +33,26 @@ variable "session_review_seconds" {
   default     = 300
 }
 
+variable "session_worker_cpu" {
+  description = "Recording worker CPU units; 1024 restores the previous allocation"
+  type        = number
+  default     = 512
+  validation {
+    condition     = contains([512, 1024], var.session_worker_cpu)
+    error_message = "Use 512 or 1024 CPU units for the recording worker."
+  }
+}
+
+variable "session_worker_memory" {
+  description = "Recording worker memory in MiB; 3072 restores the previous allocation"
+  type        = number
+  default     = 2048
+  validation {
+    condition     = contains([2048, 3072], var.session_worker_memory)
+    error_message = "Use 2048 or 3072 MiB for the recording worker."
+  }
+}
+
 locals {
   worker_name = "session-worker"
 
@@ -68,8 +88,8 @@ resource "aws_ecs_task_definition" "session_worker" {
   family                   = "${local.name}-${local.worker_name}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 3072
+  cpu                      = var.session_worker_cpu
+  memory                   = var.session_worker_memory
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task.arn
 

@@ -59,6 +59,25 @@ class RecordingSettingsTests(unittest.TestCase):
                 self.plan()
             self.assertFalse(any(operation == 'register-task-definition' for _, operation, _ in self.aws.calls))
 
+    def test_resource_only_change_is_applied_after_bindings_are_already_present(self):
+        initial = self.plan()
+        with tempfile.TemporaryDirectory() as folder:
+            old.apply_plan(self.aws, initial, old.fingerprint(initial), folder)
+            plan = wire.build_plan(self.aws, 'example-cluster', '123456789012', 512, 2048)
+            self.assertTrue(all(not row['added_names'] for row in plan['services']))
+            changed = [row for row in plan['services'] if row['proposed'] != row['original']]
+            self.assertEqual([row['service'] for row in changed], ['session-worker'])
+            proposal = copy.deepcopy(changed[0]['proposed'])
+            proposal.update(cpu='1024', memory='3072')
+            self.assertEqual(proposal, changed[0]['original'])
+            result = old.apply_plan(self.aws, plan, old.fingerprint(plan), folder)
+            self.assertEqual(result['updated_services'], ['session-worker'])
+
+    def test_incomplete_or_unreviewed_resource_profile_is_rejected(self):
+        for cpu, memory in ((512, None), (None, 2048), (256, 1024), (512, 3072)):
+            with self.assertRaises(wire.ConfigurationError):
+                wire.build_plan(self.aws, 'example-cluster', '123456789012', cpu, memory)
+
 
 if __name__ == '__main__':
     unittest.main()
