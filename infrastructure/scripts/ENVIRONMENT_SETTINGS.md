@@ -60,3 +60,39 @@ Synthetic verification (no AWS calls):
 ```sh
 python3 -m unittest discover -s infrastructure/scripts -p 'test_*.py' -v
 ```
+
+## Private live-session attachments
+
+The application supports PDFs, PPT/PPTX and other allowed session attachments
+in a private Bunny **Storage** zone. Use one primary region without replication
+or a public Pull Zone. Supply `BUNNY_SESSION_ATTACHMENTS_ZONE`,
+`BUNNY_SESSION_ATTACHMENTS_KEY` (the zone password, not a Stream/account key),
+and `BUNNY_SESSION_ATTACHMENTS_HOST` through the existing private shared secret.
+Keep the existing production `app_secrets` input in sync before a later Terraform
+apply; `local.app_secret_keys` already exports these names without an IaC change.
+
+From reviewed main, inspect the redacted plan:
+
+```sh
+python3 scripts/wire_session_attachment_settings.py
+```
+
+After reviewing its fingerprint, apply exactly that plan with the normal private
+definition backup, then monitor ECS until the existing services are stable:
+
+```sh
+python3 scripts/wire_session_attachment_settings.py --apply \
+  --expected-plan REVIEWED_SHA256 --backup-dir /private/definition-backups
+```
+
+Only curriculum-api, learner-api, session-worker and night-api gain the three
+secret references. Images, roles, CPU/memory, schedules, desired counts and
+existing settings are retained; the worker must stop before its replacement.
+The same rollback safeguards apply. No files are migrated, and credentials for
+saved files must remain available. Existing S3/Azure attachments retain their
+original storage. Verify a synthetic file upload, retry, authorized download and
+an unauthenticated storage denial before accepting the rollout. Never log keys.
+
+This does **not** enable `SESSION_ATTACHMENTS_AUTO_IMPORT_ENABLED` or grant new
+Microsoft permissions. Automated chat collection stays off until its separate
+Microsoft consent requirement has been verified.
