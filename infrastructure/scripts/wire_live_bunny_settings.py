@@ -131,7 +131,9 @@ def public_plan(plan):
     return {'plan_sha256': fingerprint(plan), 'server_writes': 0,
         'secret_value_changes': 0, 'preserved': ['images', 'commands', 'roles', 'existing settings', 'desired counts', 'schedules'],
         'services': [{'service': item['service'], 'current_definition': item['current_arn'].rsplit('/', 1)[-1],
-            'desired_count': item['desired_count'], 'add_secret_bindings': item['added_names']}
+            'desired_count': item['desired_count'], 'add_secret_bindings': item['added_names'],
+            'resource_change': ({key: {'before': item['original'].get(key), 'after': item['proposed'].get(key)}
+                for key in ('cpu', 'memory') if item['original'].get(key) != item['proposed'].get(key)} or None)}
             for item in plan['services']]}
 
 
@@ -147,7 +149,7 @@ def apply_plan(client, plan, expected_fingerprint, backup_dir):
     updated = []
     try:
         for item in plan['services']:
-            if not item['added_names']:
+            if item['proposed'] == item['original']:
                 continue
             # Guard against another operator deploying since the plan was read.
             service, definition = service_definition(client, plan['cluster'], item['service'])

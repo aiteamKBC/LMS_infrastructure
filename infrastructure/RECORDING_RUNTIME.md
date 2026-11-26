@@ -39,6 +39,19 @@ verified. Refresh ECS tasks after changing Secrets Manager values. Confirm one
 GUID/import per source, the tutor week/component, the coach Quality occurrence,
 captions and token rejection. Do not delete old journal rows to retry a failure.
 
-Worker resources remain 1 vCPU / 3 GiB / 50 GiB until direct transfer and existing
-non-video duties have been measured. A code change alone does not reduce this
-always-on charge. No new uploader service or scheduler is provisioned here.
+The measured smaller worker profile is 0.5 vCPU / 2 GiB, retaining its 50 GiB
+temporary disk for existing non-video duties. In 288 five-minute samples over
+the preceding 24 hours, peak CPU use was 445.6 units (of 1024 reserved), and peak
+memory was 252 MiB. Apply after the application rollout, then verify a scoped
+recording and monitor task health. Terraform defaults match this profile.
+
+```
+python scripts/wire_recording_settings.py --worker-cpu 512 --worker-memory 2048
+```
+
+Use the same options with `--apply`, its reviewed fingerprint and private backup.
+The previous allocation is available with `--worker-cpu 1024 --worker-memory 3072`
+(and the corresponding Terraform variables). London on-demand compute plus
+the existing extra temporary disk is approximately $27.28/month at 730 hours,
+before networking, logs and taxes, versus $48.00 previously. These are estimates,
+not measured billing savings. No new uploader service or scheduler is provisioned.
